@@ -1,0 +1,21 @@
+{
+  "name": "trello-api",
+  "version": "1.0.0",
+  "description": "Trello API integration and validation test suite",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run --reporter verbose",
+    "test:watch": "vitest --reporter verbose"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "trello.js": "^1.2.8"
+  },
+  "devDependencies": {
+    "dotenv": "^17.3.1",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.1"
+  }
+}
