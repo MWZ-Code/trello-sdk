@@ -1,8 +1,10 @@
 {
-  "name": "trello-api",
+  "name": "trello-sdk",
   "version": "1.0.0",
-  "description": "Trello API integration and validation test suite",
+  "description": "TypeScript SDK for Trello data management with publisher-subscriber event interface",
   "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "scripts": {
     "test": "vitest run --reporter verbose",
     "test:watch": "vitest --reporter verbose",

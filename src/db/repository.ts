@@ -3,25 +3,30 @@
  * All upserts follow the version resolution rules:
  * - Cards/Boards: only upsert if incoming dateLastActivity >= local
  * - Everything else: incoming sync is authoritative
+ *
+ * Upsert functions return change indicators for event emission.
  */
 
 import type Database from 'better-sqlite3'
+import type { BoardUpsertResult, CardUpsertResult, UpsertResult } from '../sync/types.js'
 
 // ---------------------------------------------------------------------------
 // Boards
 // ---------------------------------------------------------------------------
 
-export function upsertBoard(db: Database.Database, board: any): void {
+export function upsertBoard(db: Database.Database, board: any): BoardUpsertResult {
   const existing = db
-    .prepare('SELECT date_last_activity FROM boards WHERE id = ? AND deleted_at IS NULL')
-    .get(board.id) as { date_last_activity: string | null } | undefined
+    .prepare('SELECT date_last_activity, closed FROM boards WHERE id = ? AND deleted_at IS NULL')
+    .get(board.id) as { date_last_activity: string | null; closed: number } | undefined
 
   // Version resolution: skip if local is newer
   if (existing?.date_last_activity && board.dateLastActivity) {
     if (new Date(existing.date_last_activity) > new Date(board.dateLastActivity)) {
-      return
+      return { changed: false, isNew: false }
     }
   }
+
+  const isNew = !existing
 
   db.prepare(`
     INSERT INTO boards (id, name, desc, closed, id_organization, id_member_creator, url, short_url, short_link, date_last_activity, date_last_view, prefs, label_names, deleted_at)
@@ -55,13 +60,23 @@ export function upsertBoard(db: Database.Database, board: any): void {
     prefs: board.prefs ? JSON.stringify(board.prefs) : null,
     labelNames: board.labelNames ? JSON.stringify(board.labelNames) : null,
   })
+
+  return {
+    changed: true,
+    isNew,
+    previousClosed: existing ? existing.closed === 1 : undefined,
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Lists
 // ---------------------------------------------------------------------------
 
-export function upsertList(db: Database.Database, list: any): void {
+export function upsertList(db: Database.Database, list: any): UpsertResult {
+  const existing = db
+    .prepare('SELECT id FROM lists WHERE id = ? AND deleted_at IS NULL')
+    .get(list.id)
+
   db.prepare(`
     INSERT INTO lists (id, name, closed, id_board, pos, deleted_at)
     VALUES (@id, @name, @closed, @idBoard, @pos, NULL)
@@ -78,23 +93,27 @@ export function upsertList(db: Database.Database, list: any): void {
     idBoard: list.idBoard,
     pos: list.pos ?? 0,
   })
+
+  return { changed: true, isNew: !existing }
 }
 
 // ---------------------------------------------------------------------------
 // Cards
 // ---------------------------------------------------------------------------
 
-export function upsertCard(db: Database.Database, card: any): void {
+export function upsertCard(db: Database.Database, card: any): CardUpsertResult {
   const existing = db
-    .prepare('SELECT date_last_activity FROM cards WHERE id = ? AND deleted_at IS NULL')
-    .get(card.id) as { date_last_activity: string | null } | undefined
+    .prepare('SELECT date_last_activity, id_list, closed, due FROM cards WHERE id = ? AND deleted_at IS NULL')
+    .get(card.id) as { date_last_activity: string | null; id_list: string; closed: number; due: string | null } | undefined
 
   // Version resolution: skip if local is newer
   if (existing?.date_last_activity && card.dateLastActivity) {
     if (new Date(existing.date_last_activity) > new Date(card.dateLastActivity)) {
-      return
+      return { changed: false, isNew: false }
     }
   }
+
+  const isNew = !existing
 
   db.prepare(`
     INSERT INTO cards (id, name, desc, closed, id_board, id_list, pos, due, due_complete, date_last_activity, url, short_url, short_link, id_short, start, id_attachment_cover, cover, badges, deleted_at)
@@ -148,6 +167,14 @@ export function upsertCard(db: Database.Database, card: any): void {
   if (Array.isArray(card.idLabels)) {
     syncCardLabels(db, card.id, card.idLabels)
   }
+
+  return {
+    changed: true,
+    isNew,
+    previousListId: existing?.id_list,
+    previousClosed: existing ? existing.closed === 1 : undefined,
+    previousDue: existing ? existing.due : undefined,
+  }
 }
 
 function syncCardMembers(db: Database.Database, cardId: string, memberIds: string[]): void {
@@ -170,7 +197,11 @@ function syncCardLabels(db: Database.Database, cardId: string, labelIds: string[
 // Members
 // ---------------------------------------------------------------------------
 
-export function upsertMember(db: Database.Database, member: any): void {
+export function upsertMember(db: Database.Database, member: any): UpsertResult {
+  const existing = db
+    .prepare('SELECT id FROM members WHERE id = ? AND deleted_at IS NULL')
+    .get(member.id)
+
   db.prepare(`
     INSERT INTO members (id, username, full_name, avatar_hash, avatar_url, initials, member_type, url, deleted_at)
     VALUES (@id, @username, @fullName, @avatarHash, @avatarUrl, @initials, @memberType, @url, NULL)
@@ -193,13 +224,19 @@ export function upsertMember(db: Database.Database, member: any): void {
     memberType: member.memberType ?? null,
     url: member.url ?? null,
   })
+
+  return { changed: true, isNew: !existing }
 }
 
 // ---------------------------------------------------------------------------
 // Labels
 // ---------------------------------------------------------------------------
 
-export function upsertLabel(db: Database.Database, label: any): void {
+export function upsertLabel(db: Database.Database, label: any): UpsertResult {
+  const existing = db
+    .prepare('SELECT id FROM labels WHERE id = ? AND deleted_at IS NULL')
+    .get(label.id)
+
   db.prepare(`
     INSERT INTO labels (id, name, color, id_board, deleted_at)
     VALUES (@id, @name, @color, @idBoard, NULL)
@@ -214,13 +251,19 @@ export function upsertLabel(db: Database.Database, label: any): void {
     color: label.color ?? null,
     idBoard: label.idBoard,
   })
+
+  return { changed: true, isNew: !existing }
 }
 
 // ---------------------------------------------------------------------------
 // Checklists
 // ---------------------------------------------------------------------------
 
-export function upsertChecklist(db: Database.Database, checklist: any): void {
+export function upsertChecklist(db: Database.Database, checklist: any): UpsertResult {
+  const existing = db
+    .prepare('SELECT id FROM checklists WHERE id = ? AND deleted_at IS NULL')
+    .get(checklist.id)
+
   db.prepare(`
     INSERT INTO checklists (id, name, id_board, id_card, pos, deleted_at)
     VALUES (@id, @name, @idBoard, @idCard, @pos, NULL)
@@ -244,9 +287,15 @@ export function upsertChecklist(db: Database.Database, checklist: any): void {
       upsertCheckItem(db, { ...item, idChecklist: checklist.id })
     }
   }
+
+  return { changed: true, isNew: !existing }
 }
 
-export function upsertCheckItem(db: Database.Database, item: any): void {
+export function upsertCheckItem(db: Database.Database, item: any): UpsertResult {
+  const existing = db
+    .prepare('SELECT id FROM check_items WHERE id = ? AND deleted_at IS NULL')
+    .get(item.id)
+
   db.prepare(`
     INSERT INTO check_items (id, name, state, id_checklist, pos, deleted_at)
     VALUES (@id, @name, @state, @idChecklist, @pos, NULL)
@@ -263,6 +312,8 @@ export function upsertCheckItem(db: Database.Database, item: any): void {
     idChecklist: item.idChecklist,
     pos: typeof item.pos === 'number' ? item.pos : parseFloat(item.pos) || 0,
   })
+
+  return { changed: true, isNew: !existing }
 }
 
 // ---------------------------------------------------------------------------
@@ -293,20 +344,35 @@ export function softDeleteMissing(
   boardIdColumn: string,
   boardId: string,
   activeIds: string[],
-): void {
+): string[] {
   const now = new Date().toISOString()
+
+  // Find IDs that will be soft-deleted before we update them
+  let deletedIds: string[]
   if (activeIds.length === 0) {
-    // All entities on this board are gone
-    db.prepare(
-      `UPDATE ${table} SET deleted_at = ? WHERE ${boardIdColumn} = ? AND deleted_at IS NULL`,
-    ).run(now, boardId)
-    return
+    deletedIds = (db.prepare(
+      `SELECT id FROM ${table} WHERE ${boardIdColumn} = ? AND deleted_at IS NULL`,
+    ).all(boardId) as { id: string }[]).map(r => r.id)
+
+    if (deletedIds.length > 0) {
+      db.prepare(
+        `UPDATE ${table} SET deleted_at = ? WHERE ${boardIdColumn} = ? AND deleted_at IS NULL`,
+      ).run(now, boardId)
+    }
+  } else {
+    const placeholders = activeIds.map(() => '?').join(',')
+    deletedIds = (db.prepare(
+      `SELECT id FROM ${table} WHERE ${boardIdColumn} = ? AND id NOT IN (${placeholders}) AND deleted_at IS NULL`,
+    ).all(boardId, ...activeIds) as { id: string }[]).map(r => r.id)
+
+    if (deletedIds.length > 0) {
+      db.prepare(
+        `UPDATE ${table} SET deleted_at = ? WHERE ${boardIdColumn} = ? AND id NOT IN (${placeholders}) AND deleted_at IS NULL`,
+      ).run(now, boardId, ...activeIds)
+    }
   }
 
-  const placeholders = activeIds.map(() => '?').join(',')
-  db.prepare(
-    `UPDATE ${table} SET deleted_at = ? WHERE ${boardIdColumn} = ? AND id NOT IN (${placeholders}) AND deleted_at IS NULL`,
-  ).run(now, boardId, ...activeIds)
+  return deletedIds
 }
 
 // ---------------------------------------------------------------------------

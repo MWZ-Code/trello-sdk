@@ -6,10 +6,12 @@
  * - Upsert into local DB with version resolution
  * - Soft-delete entities missing from Trello response
  * - Same code path for initial sync and incremental sync
+ * - Returns a SyncChangeSet describing what changed for event emission
  */
 
 import type Database from 'better-sqlite3'
 import type { TrelloApiClient } from '../api/client.js'
+import type { Card } from '../api/types.js'
 import {
   upsertBoard,
   upsertList,
@@ -21,6 +23,7 @@ import {
   softDeleteMissing,
   upsertSyncMeta,
 } from '../db/repository.js'
+import type { SyncChangeSet } from './types.js'
 
 export interface SyncResult {
   boardId: string
@@ -31,6 +34,7 @@ export interface SyncResult {
   labels: number
   checklists: number
   syncedAt: string
+  changes: SyncChangeSet
 }
 
 /**
@@ -52,6 +56,12 @@ export async function syncBoard(
     api.getBoardChecklists(boardId),
   ])
 
+  const changes: SyncChangeSet = {
+    boardId,
+    boards: { created: [], updated: [], closed: [], deleted: [] },
+    cards: { created: [], updated: [], moved: [], archived: [], deleted: [], dueDateChanged: [] },
+  }
+
   // Disable FK checks during sync — Trello data can have cross-board references
   // and reference archived/closed entities not in our local cache.
   db.pragma('foreign_keys = OFF')
@@ -59,7 +69,16 @@ export async function syncBoard(
   // Apply everything in a single transaction for consistency
   const syncInTransaction = db.transaction(() => {
     // Upsert board
-    upsertBoard(db, board)
+    const boardResult = upsertBoard(db, board)
+    if (boardResult.changed) {
+      if (boardResult.isNew) {
+        changes.boards.created.push(board)
+      } else if (board.closed && !boardResult.previousClosed) {
+        changes.boards.closed.push(board)
+      } else {
+        changes.boards.updated.push(board)
+      }
+    }
 
     // Upsert members first (referenced by cards and board_members)
     for (const member of members) {
@@ -81,9 +100,36 @@ export async function syncBoard(
 
     // Upsert cards (depends on lists, labels, members)
     for (const card of cards) {
-      upsertCard(db, card)
+      const cardResult = upsertCard(db, card)
+      if (cardResult.changed) {
+        const typedCard = card as Card
+        if (cardResult.isNew) {
+          changes.cards.created.push(typedCard)
+        } else {
+          // Check for specific change types
+          if (cardResult.previousListId && cardResult.previousListId !== card.idList) {
+            changes.cards.moved.push({
+              card: typedCard,
+              previousListId: cardResult.previousListId,
+              newListId: card.idList,
+            })
+          } else if (card.closed && !cardResult.previousClosed) {
+            changes.cards.archived.push(typedCard)
+          } else {
+            changes.cards.updated.push(typedCard)
+          }
+
+          // Check due date change
+          const prevDue = cardResult.previousDue ?? null
+          const newDue = card.due ?? null
+          if (prevDue !== newDue) {
+            changes.cards.dueDateChanged.push(typedCard)
+          }
+        }
+      }
     }
-    softDeleteMissing(db, 'cards', 'id_board', boardId, cards.map((c: any) => c.id))
+    const deletedCardIds = softDeleteMissing(db, 'cards', 'id_board', boardId, cards.map((c: any) => c.id))
+    changes.cards.deleted.push(...deletedCardIds)
 
     // Upsert checklists and soft-delete removed ones
     for (const checklist of checklists) {
@@ -109,6 +155,7 @@ export async function syncBoard(
     labels: labels.length,
     checklists: checklists.length,
     syncedAt: new Date().toISOString(),
+    changes,
   }
 }
 

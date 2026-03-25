@@ -1,8 +1,17 @@
-# Trello API — Implementation Plan
+# Trello SDK — Implementation Plan
 
 ## Overview
 
-This is the top-level implementation plan for the Trello API desktop application. The project follows a phased roadmap, each phase building on validated work from the previous one.
+This is the top-level implementation plan for the Trello SDK. The project produces a TypeScript SDK that abstracts Trello data management behind a publisher-subscriber event interface. External developers instantiate the SDK, subscribe to events, and receive callbacks — the internal data model (API client, SQLite cache, sync engine) is fully encapsulated.
+
+## Architectural Pivot (2026-03-25)
+
+The project shifted from a mono-repo desktop application to a publishable SDK. Key changes:
+- **Product form:** SDK library, not a Tauri desktop app
+- **Public interface:** Publisher-subscriber event pattern, not direct CRUD calls
+- **Consumer model:** Developers build their own applications on top of this SDK
+- **Data model:** Fully abstracted — consumers never touch SQLite, the API client, or sync internals
+- **Former PRDs 04–08** (board rules, RBAC, evidence linking, Tauri shell, agentic UX) are **deferred** — these are potential consumer applications or future SDK extensions, not core SDK concerns
 
 ## Status
 
@@ -12,143 +21,168 @@ This is the top-level implementation plan for the Trello API desktop application
 | 1B | API Endpoint Validation (Test Suite) | **Complete** | [prds/01-api-test-suite.md](prds/01-api-test-suite.md) |
 | 2 | Trello REST API Client | **Complete** | [prds/02-api-client.md](prds/02-api-client.md) |
 | 3 | Local SQLite Database & Sync Engine | **Complete** | [prds/03-sqlite-sync-engine.md](prds/03-sqlite-sync-engine.md) |
-| 4 | Board Rule Schema & Enforcement | Planned | [prds/04-board-rule-schema.md](prds/04-board-rule-schema.md) |
-| 5 | Role-Based Access Control | Planned | [prds/05-rbac.md](prds/05-rbac.md) |
-| 6 | Work Documentation & Evidence Linking | Planned | [prds/06-work-documentation.md](prds/06-work-documentation.md) |
-| 7 | Tauri Desktop Application Shell | Planned | [prds/07-tauri-app-shell.md](prds/07-tauri-app-shell.md) |
-| 8 | Agentic UX | Planned | [prds/08-agentic-ux.md](prds/08-agentic-ux.md) |
+| 4 | Event System Foundation | **Complete** | [prds/04-event-system.md](prds/04-event-system.md) |
+| 5 | TrelloSDK Class & Public API | **Complete** | [prds/05-sdk-public-api.md](prds/05-sdk-public-api.md) |
+| 6 | Sync-Triggered Event Emission | **Complete** | [prds/06-sync-events.md](prds/06-sync-events.md) |
 
-## Architecture (as implemented)
+### Deferred (post-SDK)
+
+These PRDs were designed for the desktop application vision. They remain on file as potential future work — either as SDK extensions or as consumer applications built on top of the SDK.
+
+| Phase | Description | Status | PRD |
+|-------|-------------|--------|-----|
+| — | Board Rule Schema & Enforcement | Deferred | [prds/04-board-rule-schema.md](prds/04-board-rule-schema.md) |
+| — | Role-Based Access Control | Deferred | [prds/05-rbac.md](prds/05-rbac.md) |
+| — | Work Documentation & Evidence Linking | Deferred | [prds/06-work-documentation.md](prds/06-work-documentation.md) |
+| — | Tauri Desktop Application Shell | Deferred | [prds/07-tauri-app-shell.md](prds/07-tauri-app-shell.md) |
+| — | Agentic UX | Deferred | [prds/08-agentic-ux.md](prds/08-agentic-ux.md) |
+
+## Architecture (target)
 
 ```
-┌───────────────────────────────────────────────────────────────┐
-│                     Current Implementation                     │
-│                                                                │
-│  ┌─────────────────────────────────────────────────────────┐  │
-│  │  src/api/                                               │  │
-│  │  TrelloApiClient — typed wrapper around trello.js       │  │
-│  │  • Error normalization (401/404/429 → typed errors)     │  │
-│  │  • Transparent pagination (>1,000 cards)                │  │
-│  │  • Batch GET support (up to 10 URLs)                    │  │
-│  │  • Full CRUD: boards, lists, cards, labels, members,    │  │
-│  │    checklists, comments, attachments                    │  │
-│  └──────────────────────┬──────────────────────────────────┘  │
-│                         │                                      │
-│  ┌──────────────────────┴──────────────────────────────────┐  │
-│  │  src/sync/                                              │  │
-│  │  State Reconciliation Sync Engine (Approach B)          │  │
-│  │  • No action replay — fetch current state, upsert       │  │
-│  │  • Idempotent: double-sync produces identical state     │  │
-│  │  • Full resync from genesis = same code path            │  │
-│  │  • Configurable poller (default 60s interval)           │  │
-│  │  • Syncs all non-closed boards automatically            │  │
-│  └──────────────────────┬──────────────────────────────────┘  │
-│                         │                                      │
-│  ┌──────────────────────┴──────────────────────────────────┐  │
-│  │  src/db/                                                │  │
-│  │  SQLite (better-sqlite3) — per-user DB files            │  │
-│  │  • 12 tables: boards, lists, cards, members, labels,    │  │
-│  │    checklists, check_items, card_members, card_labels,  │  │
-│  │    board_members, sync_meta, schema_version             │  │
-│  │  • WAL mode, soft-deletes, auto-migration               │  │
-│  │  • Trusted-host model (no encryption)                   │  │
-│  └─────────────────────────────────────────────────────────┘  │
-│                                                                │
-│  ┌─────────────────────────────────────────────────────────┐  │
-│  │  tests/ — 94 tests (Vitest)                             │  │
-│  │  • 46 API endpoint validation tests (live Trello)       │  │
-│  │  • 22 TrelloApiClient wrapper tests (live Trello)       │  │
-│  │  • 20 DB schema/repository tests (in-memory SQLite)     │  │
-│  │  • 6 sync engine tests (live Trello + in-memory DB)     │  │
-│  └─────────────────────────────────────────────────────────┘  │
-└───────────────────────────────────────────────────────────────┘
-                         │
-                         ▼
-                  Trello REST API
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Consumer Application                         │
+│                                                                     │
+│  const sdk = await TrelloSDK.create({ key, token, syncIntervalMs }) │
+│  sdk.subscribe(myAccountSubscriber)                                 │
+│  sdk.subscribeToBoard('board-123', myBoardSubscriber)               │
+│  sdk.startSync()                                                    │
+│  await sdk.createCard({ name: '...', idList: '...' })               │
+└────────────────────────────┬────────────────────────────────────────┘
+                             │
+┌────────────────────────────┴────────────────────────────────────────┐
+│                          TrelloSDK (public)                         │
+│                                                                     │
+│  ┌──────────────┐  ┌──────────────────┐  ┌───────────────────────┐ │
+│  │  Mutation     │  │  Subscription    │  │  Sync Control         │ │
+│  │  Methods      │  │  Management      │  │                       │ │
+│  │              │  │                  │  │  startSync()          │ │
+│  │  createBoard │  │  subscribe()     │  │  stopSync()           │ │
+│  │  createCard  │  │  unsubscribe()   │  │  sync()               │ │
+│  │  moveCard    │  │  subscribeToBoard│  │                       │ │
+│  │  ...         │  │  unsubscribe...  │  │                       │ │
+│  └──────┬───────┘  └────────┬─────────┘  └───────────┬───────────┘ │
+│         │                   │                         │             │
+│  ┌──────┴───────────────────┴─────────────────────────┴───────────┐ │
+│  │  EventDispatcher (internal)                                    │ │
+│  │  • Account subscribers: Set<AccountEventSubscriber>            │ │
+│  │  • Board subscribers: Map<boardId, Set<BoardEventSubscriber>>  │ │
+│  │  • Synchronous dispatch, catch-and-continue                    │ │
+│  └──────┬─────────────────────────────────────────────┬───────────┘ │
+│         │                                             │             │
+│  ┌──────┴───────────┐                   ┌─────────────┴───────────┐ │
+│  │  TrelloApiClient  │                   │  Sync Engine + Poller   │ │
+│  │  (internal)       │                   │  (internal)             │ │
+│  │                   │                   │                         │ │
+│  │  Mutation → 200   │                   │  Fetch → Diff → Upsert │ │
+│  │  → emit event     │                   │  → emit sync events    │ │
+│  └──────┬────────────┘                   └────────────┬────────────┘ │
+│         │                                             │             │
+│  ┌──────┴─────────────────────────────────────────────┴───────────┐ │
+│  │  SQLite Database (internal)                                    │ │
+│  │  12 tables, WAL mode, soft-deletes, version resolution         │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────┘
+                             │
+                             ▼
+                      Trello REST API
 ```
 
-## Key Decisions (implemented)
+## Event Flow
+
+### Mutation-ack events (PRD 05)
+
+```
+Consumer calls sdk.createCard(...)
+  → TrelloApiClient.createCard() → Trello API → 200 OK
+  → EventDispatcher.dispatchBoardEvent(boardId, CardCreatedEvent { source: 'mutation' })
+  → Board subscribers' onCardCreated() called synchronously
+```
+
+### Sync-triggered events (PRD 06)
+
+```
+SyncPoller tick (or manual sdk.sync())
+  → syncBoard() fetches current Trello state
+  → Upsert with change detection: was this card moved? archived? new?
+  → Build SyncChangeSet
+  → Transaction commits
+  → Map changes to events with source: 'sync'
+  → EventDispatcher dispatches to appropriate subscribers
+```
+
+## Key Decisions
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| API Client | `trello.js` wrapped in `TrelloApiClient` | TypeScript, ~100% API coverage, actively maintained. Wrapper adds error normalization and pagination. |
-| Local Database | SQLite via `better-sqlite3`, per-user files | WAL mode, fast sync, no server dependency. Per-user isolation via separate DB files. |
-| Sync Strategy | State reconciliation (Approach B) | Fetch current state → upsert. No action replay. Inherently idempotent. Full resync = same code path as incremental. |
-| Version Resolution | `dateLastActivity` comparison for cards/boards; incoming sync authoritative for all other entities | Cards/boards have timestamps. Lists/labels/checklists don't — stale writes self-correct on next 60s sync cycle. |
-| Deletion | Soft-delete (`deleted_at` column) | Preserves history. Storage is not a concern at current scale. |
-| Multi-user Isolation | Separate SQLite DB file per `idMember` | Trusted-host model — no encryption. Simple, clean isolation. |
-| Board Selection | Auto-sync all non-closed boards | Explicit selection is a trivial future enhancement if needed. |
-| Offline Queue | Deferred | All writes go directly to Trello API for now. Offline queue adds complexity that isn't needed yet. |
-| FK Constraints | Disabled during sync, enabled otherwise | Trello data can have cross-board references and reference archived entities not in local cache. |
-| Desktop Engine | Tauri (planned, not yet implemented) | Rust backend + web frontend. Deferred to PRD 07. |
-| UI | Custom React + Tailwind (planned) | Embedding Trello UI blocked by CSP/ToS. Deferred to PRD 07. |
+| Product form | SDK (TypeScript library) | Enables ecosystem of consumer apps, not coupled to desktop |
+| Public interface | Publisher-subscriber events | Decouples consumers from data model; per-board subscribers enable differentiated handling (silent vs. toast) |
+| Event delivery | Synchronous (EventEmitter-style) | Simple, predictable, no queuing complexity |
+| Event sources | Mutation ack + sync overwrite | Covers all state changes regardless of origin |
+| Sync control | Configurable interval + manual trigger | `syncIntervalMs` in config; `startSync()`/`stopSync()`/`sync()` methods |
+| Internal modules | Not exported | `TrelloApiClient`, `Database`, `SyncPoller`, `EventDispatcher` are implementation details |
+| `src/clients/` | Deleted (PRD 05) | Redundant with `TrelloApiClient`; wrong abstraction for SDK pattern |
+| Package name | `trello-sdk` | Matches repo name and product intent |
 
 ## Current Codebase Structure
 
 ```
-trello-api/
+trello-sdk/
 ├── CLAUDE.md                    # Project scope
 ├── package.json                 # Dependencies: trello.js, better-sqlite3, vitest
 ├── tsconfig.json
 ├── vitest.config.ts
-├── .env.example                 # TRELLO_API_KEY, TRELLO_TOKEN, TEST_BOARD_NAME
+├── .env.example
 │
 ├── research/                    # Phase 1A research artifacts
-│   ├── authentication.md
-│   ├── rest-api-endpoints.md
-│   ├── data-models.md
-│   ├── sdks-and-libraries.md
-│   └── powerups-and-embedding.md
 │
 ├── implementation/              # Plans and PRDs
 │   ├── plan.md                  # This file
 │   └── prds/
-│       ├── 01-api-test-suite.md     # ✅ Complete
-│       ├── 02-api-client.md         # ✅ Complete
-│       ├── 03-sqlite-sync-engine.md # ✅ Complete
-│       ├── 04-board-rule-schema.md
-│       ├── 05-rbac.md
-│       ├── 06-work-documentation.md
-│       ├── 07-tauri-app-shell.md
-│       └── 08-agentic-ux.md
+│       ├── 01-api-test-suite.md         # ✅ Complete
+│       ├── 02-api-client.md             # ✅ Complete
+│       ├── 03-sqlite-sync-engine.md     # ✅ Complete
+│       ├── 04-event-system.md           # 🔜 Next
+│       ├── 05-sdk-public-api.md         # 🔜 Planned
+│       ├── 06-sync-events.md            # 🔜 Planned
+│       ├── 04-board-rule-schema.md      # ⏸ Deferred
+│       ├── 05-rbac.md                   # ⏸ Deferred
+│       ├── 06-work-documentation.md     # ⏸ Deferred
+│       ├── 07-tauri-app-shell.md        # ⏸ Deferred
+│       └── 08-agentic-ux.md             # ⏸ Deferred
 │
 ├── src/
-│   ├── api/                     # PRD 02: Trello API client
-│   │   ├── client.ts            # TrelloApiClient class
-│   │   ├── errors.ts            # Typed error hierarchy
-│   │   ├── types.ts             # Normalized response types
+│   ├── api/                     # PRD 02: Trello API client (internal)
+│   │   ├── client.ts
+│   │   ├── errors.ts
+│   │   ├── types.ts
 │   │   └── index.ts
-│   ├── db/                      # PRD 03: SQLite database
-│   │   ├── schema.ts            # 12-table schema definition
-│   │   ├── connection.ts        # Per-user DB connection manager
-│   │   ├── repository.ts        # Upserts, queries, soft-delete
+│   ├── db/                      # PRD 03: SQLite database (internal)
+│   │   ├── schema.ts
+│   │   ├── connection.ts
+│   │   ├── repository.ts        # Modified: upserts return change indicators
 │   │   └── index.ts
-│   └── sync/                    # PRD 03: Sync engine
-│       ├── engine.ts            # State reconciliation sync
-│       ├── poller.ts            # Configurable interval polling
-│       └── index.ts
+│   ├── sync/                    # PRD 03+06: Sync engine (internal)
+│   │   ├── engine.ts            # Modified: builds SyncChangeSet
+│   │   ├── poller.ts
+│   │   ├── types.ts             # PRD 06: SyncChangeSet, UpsertResult types
+│   │   └── index.ts
+│   ├── events/                  # PRD 04: Event system
+│   │   ├── types.ts             # 11 event types with source discriminator
+│   │   ├── subscribers.ts       # AccountEventSubscriber, BoardEventSubscriber
+│   │   ├── dispatcher.ts        # Internal EventDispatcher
+│   │   └── index.ts
+│   ├── sdk.ts                   # PRD 05: TrelloSDK class
+│   └── index.ts                 # PRD 05: Public barrel exports
 │
 ├── tests/
 │   ├── helpers/
-│   │   ├── client.ts            # Shared TrelloClient for tests
-│   │   ├── setup.ts             # Test board lifecycle
-│   │   └── validators.ts        # Shape assertion helpers
 │   └── unit_tests/
-│       ├── boards.test.ts       # 9 tests
-│       ├── lists.test.ts        # 7 tests
-│       ├── cards.test.ts        # 13 tests
-│       ├── labels.test.ts       # 5 tests
-│       ├── members.test.ts      # 4 tests
-│       ├── checklists.test.ts   # 8 tests
-│       ├── api-client.test.ts   # 22 tests
-│       ├── db-schema.test.ts    # 20 tests
-│       └── sync-engine.test.ts  # 6 tests
 │
 ├── scripts/
-│   └── create-mock-db.ts        # Sync live account → fixture DB
+│   └── create-mock-db.ts
 │
-└── fixtures/                    # Local mock DBs (gitignored)
-    └── {memberId}/trello.db
+└── fixtures/
 ```
 
 ## Research Artifacts
@@ -160,11 +194,9 @@ All research documents are in `/research/`:
 - `sdks-and-libraries.md` — Library comparison, recommendation for trello.js
 - `powerups-and-embedding.md` — Embedding not viable, UI must be rebuilt
 
-## Next Up: PRD 04 — Board Rule Schema
+## Completed: PRDs 04–06
 
-The next phase defines a local rules engine that validates mutations against per-board rulesets before committing to Trello. Key design points already established:
-- Butler rules have no API access — rules are defined locally
-- Rule types: required fields, allowed transitions, label constraints, member constraints, naming conventions
-- Rules stored as JSON per-board in SQLite
-- Engine validates outgoing mutations only (not incoming sync data)
-- Evaluation must be < 10ms per mutation (no network calls)
+All three SDK core PRDs have been implemented:
+- **PRD 04** — Event types (11 events), subscriber interfaces, and internal dispatcher
+- **PRD 05** — `TrelloSDK` concrete class, public barrel exports, `src/clients/` deleted, package renamed
+- **PRD 06** — Upsert change detection, `SyncChangeSet`, sync-triggered event dispatch
