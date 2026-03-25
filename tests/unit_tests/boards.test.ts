@@ -23,8 +23,9 @@ describe('Board CRUD', () => {
   })
 
   test('CREATE and DELETE board', async () => {
-    // Small delay to avoid hitting board creation limits when running full suite
-    await new Promise((r) => setTimeout(r, 2000))
+    // Longer delay — Trello free tier throttles rapid board creation when
+    // the full suite is running (setup + api-client tests also create boards).
+    await new Promise((r) => setTimeout(r, 5000))
 
     const board = await client.boards.createBoard({
       name: 'Throwaway Board',

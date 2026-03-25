@@ -11,7 +11,8 @@ export default defineConfig({
     sequence: {
       sequential: true,
     },
-    singleFork: true,
+    isolate: false,
+    fileParallelism: false,
     reporters: ['verbose'],
   },
 })
