@@ -1,81 +1,90 @@
 # PRD 03: Local SQLite Database & Sync Engine
 
-**Status:** Planned
-**Depends on:** PRD 02 (API client with rate limiting)
+**Status:** In Progress
+**Depends on:** PRD 02 (API client with error normalization)
 
 ## Problem Description
 
-The application needs a local SQLite database that mirrors the user's Trello boards for offline-first operation. A sync engine must keep the local cache consistent with Trello's server state, handling conflicts and network interruptions gracefully.
+The application needs a local SQLite database that mirrors the user's Trello boards for offline-first operation. A sync engine must keep the local cache consistent with Trello's server state via state reconciliation (Approach B).
 
-## Current State
+## Design Decisions
 
-- Research doc `research/data-models.md` proposes a 20-table SQLite schema with sync metadata
-- 13 Trello entities are fully documented with field inventories
-- Rate limits are understood: 100 req/10s per token, no batch writes
-- Webhook-only action types identified (22+ types not available via polling)
+### Sync Strategy: State Reconciliation (Approach B)
+- **No action replay** — we never try to "replay" Trello actions as mutations
+- Sync fetches current entity state and upserts into local DB
+- Upserts are inherently idempotent — same data written twice is a no-op
+- Full resync from genesis uses the same code path as incremental sync
+
+### Version Resolution
+- **Cards & Boards** (have `dateLastActivity`): upsert only if incoming `dateLastActivity >= local dateLastActivity`
+- **All other entities** (lists, labels, checklists, members): incoming sync is always authoritative. Any stale write gets corrected on the next sync cycle (60s).
+
+### Board Selection
+- Automated: sync all non-closed boards the user has access to
+- Closed boards are not synced but existing local data is preserved (soft-close)
+
+### Deletion Handling
+- Soft-delete: set `deleted_at` timestamp, never hard-delete
+
+### Multi-User Isolation
+- Separate SQLite DB file per user (keyed by `idMember`)
+- Trusted-host model — no encryption needed
+
+### What's Deferred
+- Offline mutation queue (skip for now — all writes go directly to Trello API)
+- Webhook-based sync (requires relay server)
+- Custom field sync
+- Attachment file caching (metadata only)
 
 ## Requirements
 
 ### Functional
-1. **SQLite schema** implementing all core entities:
-   - boards, lists, cards, members, organizations, labels
-   - checklists, check_items, attachments, custom_fields, custom_field_items
-   - actions (activity log)
-   - Join tables: card_members, card_labels, board_members, org_members
-2. **Sync metadata tables:**
-   - `sync_meta` — per-board sync state (last_synced, sync_status, last_action_id)
-   - `pending_changes` — offline mutation queue (operation, entity, payload, status)
-3. **Initial sync:** Full board fetch in 1-5 API calls using nested resources
+1. **SQLite schema** implementing core entities:
+   - boards, lists, cards, members, labels
+   - checklists, check_items
+   - Join tables: card_members, card_labels, board_members
+   - `sync_meta` — per-board sync state (last_synced, last_activity)
+2. **Database connection manager:**
+   - Per-user DB files at `{dataDir}/{idMember}/trello.db`
+   - WAL mode enabled on connection
+   - Schema auto-migration on open
+3. **Initial sync:**
+   - Fetch all non-closed boards for the user
+   - For each board: fetch full state using nested resources (1-5 API calls)
+   - Upsert all entities into local DB
 4. **Incremental sync (polling):**
-   - Poll `GET /boards/{id}/actions?since={lastActionId}` periodically
-   - Apply action deltas to local DB
-   - Configurable poll interval (default 60s)
-5. **Offline mutation queue:**
-   - Queue write operations when offline
-   - Replay queue on reconnect with conflict detection
-   - Conflict resolution: last-write-wins with user notification on conflicts
-6. **Multi-user data isolation:**
-   - Separate SQLite database file per authenticated user (keyed by `idMember`)
-   - Database path: `{app_data_dir}/{idMember}/trello.db`
+   - Configurable interval (default 60s)
+   - For each synced board: re-fetch current state
+   - Upsert with version resolution (dateLastActivity for cards/boards, authoritative for others)
+   - Update `sync_meta` after each board sync
+5. **Soft-delete support:**
+   - All entity tables have `deleted_at` column
+   - Entities missing from Trello response are marked as soft-deleted
+   - Queries filter on `deleted_at IS NULL` by default
 
 ### Non-Functional
 1. SQLite in WAL mode for concurrent reads
-2. All DB operations must be transactional
-3. Sync must not block UI thread
-4. Initial sync of a 1,000-card board must complete in < 30 seconds
+2. All sync operations wrapped in transactions
+3. Initial sync of a 1,000-card board must complete in < 30 seconds
 
 ## Impacted Files
 
 | File / Module | Change Type | Notes |
 |---|---|---|
-| `src/db/schema.sql` | create | SQLite CREATE TABLE statements |
-| `src/db/migrations/` | create | Versioned migration files |
+| `src/db/schema.ts` | create | Schema definition + migration |
 | `src/db/connection.ts` | create | DB connection manager (per-user) |
+| `src/db/repository.ts` | create | CRUD operations on local DB |
 | `src/sync/engine.ts` | create | Orchestrates initial + incremental sync |
-| `src/sync/poller.ts` | create | Periodic action polling |
-| `src/sync/queue.ts` | create | Offline mutation queue |
-| `src/sync/conflict.ts` | create | Conflict detection and resolution |
-| `tests/unit_tests/sync-engine.test.ts` | create | Sync logic tests |
-| `tests/unit_tests/db-schema.test.ts` | create | Schema validation tests |
-
-## Constraints
-
-- Must work with `better-sqlite3` (Node.js) and Tauri's SQLite plugin (production)
-- Schema must match Trello's data model closely but allow local-only metadata columns
-- Polling must respect rate limits — budget ~20% of capacity for sync, reserve 80% for user operations
-- Do not attempt to sync board preferences/settings that the user cannot modify
+| `src/sync/poller.ts` | create | Periodic sync with configurable interval |
+| `tests/unit_tests/db-schema.test.ts` | create | Schema + repository tests |
+| `tests/unit_tests/sync-engine.test.ts` | create | Sync logic tests (against live API) |
 
 ## Success Criteria
 
 1. Schema creates all tables without errors
-2. Initial sync of a test board populates all entity tables correctly
-3. Incremental sync detects and applies new actions
-4. Offline mutations queue correctly and replay on reconnect
-5. Two different user databases are fully isolated (no data leakage)
-6. Existing 46 API tests still pass
-
-## Out of Scope
-
-- Webhook-based sync (future enhancement — requires relay server)
-- Custom field sync (deferred until custom fields are needed)
-- Attachment file caching (store metadata only, not files)
+2. Initial sync of a real board populates all entity tables correctly
+3. Incremental sync upserts are idempotent — running sync twice produces identical DB state
+4. Full resync from empty DB produces same state as incremental sync
+5. Cards/boards with newer local `dateLastActivity` are not overwritten by stale sync
+6. Entities removed from Trello are soft-deleted locally
+7. Existing 68 API tests still pass

@@ -1,0 +1,4 @@
+export { syncBoard, syncAllBoards } from './engine.js'
+export type { SyncResult } from './engine.js'
+export { SyncPoller } from './poller.js'
+export type { PollerConfig } from './poller.js'

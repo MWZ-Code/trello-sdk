@@ -3,3 +3,6 @@ dist/
 .env
 coverage/
 *.tsbuildinfo
+fixtures/**/*.db
+fixtures/**/*.db-wal
+fixtures/**/*.db-shm
