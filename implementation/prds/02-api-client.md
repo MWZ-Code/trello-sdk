@@ -1,6 +1,7 @@
 # PRD 02: Trello REST API Client Layer
 
-**Status:** Planned
+**Status:** Complete
+**Commit:** `03ea85e`
 **Depends on:** PRD 01 (test suite validates endpoints)
 
 ## Problem Description

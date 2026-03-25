@@ -10,7 +10,7 @@ This is the top-level implementation plan for the Trello API desktop application
 |-------|-------------|--------|-----|
 | 1A | Trello API Research | **Complete** | — |
 | 1B | API Endpoint Validation (Test Suite) | **Complete** | [prds/01-api-test-suite.md](prds/01-api-test-suite.md) |
-| 2 | Trello REST API Client | Planned | [prds/02-api-client.md](prds/02-api-client.md) |
+| 2 | Trello REST API Client | **Complete** | [prds/02-api-client.md](prds/02-api-client.md) |
 | 3 | Local SQLite Database & Sync Engine | Planned | [prds/03-sqlite-sync-engine.md](prds/03-sqlite-sync-engine.md) |
 | 4 | Board Rule Schema & Enforcement | Planned | [prds/04-board-rule-schema.md](prds/04-board-rule-schema.md) |
 | 5 | Role-Based Access Control | Planned | [prds/05-rbac.md](prds/05-rbac.md) |
